@@ -2,6 +2,7 @@ import asyncio
 import json
 from aiohttp import web
 from camoufox.async_api import AsyncCamoufox
+from playwright.async_api import Error as PlaywrightError
 
 _browser = None
 _camoufox = None
@@ -33,11 +34,23 @@ async def handle_content(request):
         if cookies:
             await context.add_cookies(cookies)
         page = await context.new_page()
-        await page.goto(
-            url,
-            wait_until=goto_options.get("waitUntil", "networkidle"),
-            timeout=goto_options.get("timeout", 15000),
-        )
+        timeout = goto_options.get("timeout", 15000)
+        try:
+            await page.goto(
+                url,
+                wait_until=goto_options.get("waitUntil", "networkidle"),
+                timeout=timeout,
+            )
+        except PlaywrightError as e:
+            if "Download is starting" not in str(e):
+                return web.json_response({"error": str(e)}, status=502)
+            # Non-renderable response (RSS, JSON, XML, ...): fetch the raw body instead.
+            resp = await context.request.get(url, timeout=timeout)
+            return web.Response(
+                body=await resp.body(),
+                status=resp.status,
+                content_type=resp.headers.get("content-type", "text/plain").split(";")[0],
+            )
         html = await page.content()
         return web.Response(text=html, content_type="text/html")
     finally:
